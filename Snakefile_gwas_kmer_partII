@@ -1,0 +1,356 @@
+import os
+import pandas as pd
+import numpy as np
+
+script_path = config['script_path']
+
+
+path_res = config['results_path']
+
+reads_dir = config['reads_folder']
+
+reference_genome = config['ref_genome']
+
+bowtie_idx = config['bowtie_idx']
+
+conda_env_folder = config['conda_env_folder']
+
+
+spades_folder_10per = path_res + "/spades_out_10per"
+
+spades_folder_5per = path_res + "/spades_out_5per"
+
+
+rule all:
+	input:
+		path_res + "/manhattan_intersect_pass10.html",
+		path_res + "/manhattan_uniq_pass10.html",
+		path_res + "/manhattan_intersect_pass5.html",
+		path_res + "/manhattan_uniq_pass5.html",
+
+		expand(path_res + "/scaffolds_aligned_{name}.sorted.bed", name=["5per", "10per"]),
+		expand(path_res + "/kmers_aligned_{name}.sorted.bed", name=["5per", "10per"]),
+		
+
+rule concat_fq:
+	output:
+		R1 = f"{path_res}/reads_r1.fq",
+		R2 = f"{path_res}/reads_r2.fq"
+
+	
+	shell:
+		"""
+		ls -1 {reads_dir}/*_1.fq.gz | sort | xargs zcat > {output.R1}
+		ls -1 {reads_dir}/*_2.fq.gz | sort | xargs zcat > {output.R2}
+		"""
+
+rule bbduk:
+	input:
+		kmers = path_res + "/{name}.fa",
+		r1 = f"{path_res}/reads_r1.fq",
+		r2 = f"{path_res}/reads_r2.fq"
+
+	output:
+		reads = path_res + "/kmers_{name}_match.fq",
+		stat = path_res + "/kmers_{name}_reads_stat.txt"
+
+    
+	threads: 16
+
+	conda:
+		f"{conda_env_folder}/bbduk.yml"        
+         
+	shell:
+		"""
+		bbduk.sh in={input.r1} in2={input.r2} outm={output.reads} ref={input.kmers}  k=31 threads=12 stats={output.stat}
+		"""
+
+rule assembel_reads:
+	input:
+		reads= path_res + "/kmers_{name}_match.fq"
+
+	output:
+		path_res + "/scaffolds_{name}.fasta"
+
+	threads: 10
+
+
+	conda:
+		f"{conda_env_folder}/spades.yml"
+
+# I used the --sc option cos the small amount of reads raise an error 
+	shell:
+		"""
+		spades.py --sc --careful --only-assembler --12 {input.reads} -o {path_res}/spades_out_{wildcards.name}
+		cp {path_res}/spades_out_{wildcards.name}/scaffolds.fasta {path_res}/scaffolds_{wildcards.name}.fasta
+		"""
+
+
+rule align_scaffolds:
+	input:
+		scaffolds = path_res + "/scaffolds_{name}.fasta"
+
+	output: 
+		scaffolds_aligned = path_res + "/scaffolds_aligned_{name}.sam"
+	
+
+	threads: 1
+	
+	conda: f"{conda_env_folder}/bwa.yml"
+
+	shell: 
+		"""
+		bwa mem {reference_genome} {input.scaffolds} > {output.scaffolds_aligned}
+		"""
+
+
+rule scaffolds_bam2bed:
+	input: 
+		path_res + "/scaffolds_aligned_{name}.sam"
+
+	output: 
+		path_res + "/scaffolds_aligned_{name}.sorted.bed"
+
+
+	threads: 1
+
+	conda: f"{conda_env_folder}/bedtools.yml"
+
+	shell:
+		"""
+		samtools view -b {input} | bamToBed -bed12 -i stdin | sort -k1,1 -k2,2n > {output}
+		"""
+
+
+rule align_kmers:
+	input:
+		kmers= path_res + "/{name}.fa"
+
+	output:
+		mached = path_res + "/matched_kmer_{name}.txt",
+
+		unmached = path_res + "/unmatched_kmer_{name}.txt",
+
+		out_sam = path_res + "/kmers_aligned_{name}.sam"
+
+
+	conda: f"{conda_env_folder}/bowtie2.yml"
+
+	shell:
+		"""
+		bowtie2 -f --very-sensitive -L 10 -k 5 --score-min L,-0.5,-10 --un {output.unmached} --al {output.mached} \
+		 -x {bowtie_idx} -U {input.kmers} -S {output.out_sam}
+		"""
+
+
+rule kmers_bam2bed:
+	input:
+		path_res + "/kmers_aligned_{name}.sam"
+
+	output:
+		path_res + "/kmers_aligned_{name}.sorted.bed"
+
+
+	conda: f"{conda_env_folder}/bedtools.yml"
+
+	shell:
+		"""
+		samtools view -b {input} | bamToBed -cigar -i stdin | sort -k1,1 -k2,2n > {output}
+		"""
+
+rule intersect:
+	input:
+		scaffolds_5 = path_res + "/scaffolds_aligned_5per.sorted.bed",
+		scaffolds_10 = path_res + "/scaffolds_aligned_10per.sorted.bed",
+
+		kmers_5 = path_res + "/kmers_aligned_5per.sorted.bed",
+		kmers_10 = path_res + "/kmers_aligned_10per.sorted.bed"
+
+	output:
+		intersect5 = path_res + "/kmer_scaffold_intersect_pass5.bed",
+		intersect10 = path_res + "/kmer_scaffold_intersect_pass10.bed"
+
+
+	conda: f"{conda_env_folder}/bedtools.yml"
+
+	shell:
+                """
+		intersectBed -sorted -wao -a {input.kmers_5} -b {input.scaffolds_5}  > {output.intersect5}
+		intersectBed -sorted -wao -a {input.kmers_10} -b {input.scaffolds_10}  > {output.intersect10}
+		"""
+
+
+rule process_kmers_pass5:
+	input:
+		inter5 = path_res + "/kmer_scaffold_intersect_pass5.bed",
+	
+		kmers_pass5 = path_res + "/pass_threshold_5per",
+
+		unmached = path_res + "/unmatched_kmer_5per.txt"
+
+	output:
+		path_res + "/data_for_plot_pass5.csv"
+
+
+	run:
+		# read table of interxection between kmers and scaffolds
+		if os.path.isfile(input.inter5) and os.path.getsize(input.inter5) > 0:
+			intersect = pd.read_csv(input.inter5, sep = '\t', header=None)
+			# remove some columns
+			intersect.drop(intersect.columns[[4,11,13,14,15,16,18]], axis=1, inplace=True)
+			# give column names
+			names = ['chr_kmer','start_kmer','end_kmer','name_kmer','strand_kmer','cigar_kmer','chr_contig','start_contig','end_contig','name_contig','strand_contig','length_contig','overlap']
+			intersect.columns=names
+
+			intersect['name_kmer'] = intersect['name_kmer'].astype('str')
+		
+			# read gwas results
+			kmers = pd.read_csv(input.kmers_pass5, sep = "\t")
+			# give a name to the kmr
+			kmers['name_kmer'] = kmers['rs'].str.split('_', expand=True)[1]
+			# take only kmer name and p-value
+			kmers = kmers[['name_kmer','p_lrt']]
+		
+			# merge with intersection
+			kmers = kmers.merge(intersect, on='name_kmer', how='outer')
+		
+			#mark kmers that where not aligned with bowtie
+			unalign = []
+			with open (input.unmached, 'r') as f:
+				a = f.readline()
+				while a:
+					if a.startswith(">"):
+						unalign.append(str(a.strip('>\n')))
+					a = f.readline()
+
+			# mark kmers that have no match
+			kmers['state'] = kmers['name_kmer'].apply(lambda x: 'not_aligned' if x in unalign else "")
+
+			#mark duplicates
+			kmers['state'] = np.where(kmers.duplicated(subset='name_kmer', keep=False), 'duplicate', kmers['state'])
+
+	
+			# add column that say if the kmer is a full match or not
+			kmers['match'] = np.where(kmers['cigar_kmer'] == '31M', 'full', '')
+
+			# add -logpv column
+			kmers['logPV'] = -(np.log10(kmers['p_lrt']))
+
+			# if a kmer is intersect with few scaffolds select the longest
+			def f(group):  # a function that will return the kmer with the longest contig
+    				group = group.sort_values(['length_contig'], ascending=False)
+    				return group.iloc[0]
+
+			grouped = kmers.groupby(['name_kmer', 'chr_kmer', 'start_kmer'], dropna=False)
+			kmers = grouped.apply(f)
+
+			# save results
+			kmers.to_csv(output[0], index=False)
+
+		else:
+			a = pd.DataFrame()
+			a.to_csv(output[0])
+
+rule process_kmers_pass10:
+	input:
+		inter10 = path_res + "/kmer_scaffold_intersect_pass10.bed",
+
+		kmers_pass10 = path_res + "/pass_threshold_10per",
+
+                unmached = path_res + "/unmatched_kmer_10per.txt"
+	
+	output:
+                out=path_res + "/data_for_plot_pass10.csv"
+
+
+	run:
+		if os.path.isfile(input.inter10) and os.path.getsize(input.inter10) > 0:
+			# read table of interxection between kmers and scaffolds
+                	intersect = pd.read_csv(input.inter10, sep = '\t', header=None)
+                	# remove some columns
+                	intersect.drop(intersect.columns[[4,11,13,14,15,16,18]], axis=1, inplace=True)
+                	# give column names
+                	names = ['chr_kmer', 'start_kmer', 'end_kmer', 'name_kmer', 'strand_kmer', 'cigar_kmer', 'chr_contig', 'start_contig', 'end_contig', 'name_contig', 'strand_contig', 'length_contig', 'overlap']
+
+                	intersect.columns=names
+
+                	intersect['name_kmer'] = intersect['name_kmer'].astype('str')
+
+              		# read gwas results
+                	kmers = pd.read_csv(input.kmers_pass10, sep = "\t")
+                	# give a name to the kmr
+                	kmers['name_kmer'] = kmers['rs'].str.split('_', expand=True)[1]
+                	# take only kmer name and p-value
+                	kmers = kmers[['name_kmer','p_lrt']]
+
+                	# merge with intersection
+                	kmers = kmers.merge(intersect, on='name_kmer', how='outer')
+
+                	#mark kmers that where not aligned with bowtie
+                	unalign = []
+                	with open (input.unmached, 'r') as f:
+                        	a = f.readline()
+                        	while a:
+                        		if a.startswith(">"):
+                                		unalign.append(str(a.strip('>\n')))
+                        		a = f.readline()
+
+			# mark kmers that have no match
+                	kmers['state'] = kmers['name_kmer'].apply(lambda x: 'not_aligned' if x in unalign else "")
+
+                	#mark duplicates
+                	kmers['state'] = np.where(kmers.duplicated(subset='name_kmer', keep=False), 'duplicate', kmers['state'])
+
+
+                	# add column that say if the kmer is a full match or not
+                	kmers['match'] = np.where(kmers['cigar_kmer'] == '31M', 'full', '')
+
+                	# add -logpv column
+                	kmers['logPV'] = -(np.log10(kmers['p_lrt']))
+
+                	# if a kmer is intersect with few scaffolds select the longest
+                	def f(group):  # a function that will return the kmer with the longest contig
+                		group = group.sort_values(['length_contig'], ascending=False)
+                		return group.iloc[0]
+
+                	grouped = kmers.groupby(['name_kmer', 'chr_kmer', 'start_kmer'], dropna=False)
+                
+			kmers = grouped.apply(f)
+
+			# save results
+			kmers.to_csv(output[0],index=False)
+		else:
+			pd.to_csv(pd.DataFrame())
+
+
+rule make_man_plot_pass5:
+        input:
+                path_res + "/data_for_plot_pass5.csv"
+
+	output:
+		path_res + "/manhattan_intersect_pass5.html",
+		path_res + "/manhattan_uniq_pass5.html"
+
+
+	conda:
+		f"{conda_env_folder}/r-manhattan.yml"
+
+	script:
+		f"{script_path}/man_kmers_snakemake_intersection.R"
+
+
+rule make_man_plot_pass10:
+        input:
+                path_res + "/data_for_plot_pass10.csv"
+
+        output:
+                path_res + "/manhattan_intersect_pass10.html",
+		path_res + "/manhattan_uniq_pass10.html"
+
+        conda:
+                f"{conda_env_folder}/r-manhattan.yml"
+
+
+        script:
+                f"{script_path}/man_kmers_snakemake_intersection.R"
+

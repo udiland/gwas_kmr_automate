@@ -1,0 +1,6 @@
+name: bbduk
+channels:
+  - agbiome
+  - bioconda
+dependencies:
+  - bbtools

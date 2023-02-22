@@ -1,0 +1,12 @@
+name: r-manhattan
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - r-base=3.6.3
+  - r-ggplot2
+  - r-dplyr
+  - r-htmlwidgets
+  - r-plotly
+  - pandoc-plot
+ 

@@ -1,0 +1,170 @@
+import os
+import pandas as pd
+
+
+path_res = config['results_path']
+
+phenotype = config['phenotype_tbl']
+
+gwas_out = config['gwas_out']
+
+scripts = config['script_path']
+
+conda_env_folder = config['conda_env_folder']
+
+
+rule all:
+	input:
+		path_res + "/5per_kmers_count_plot.pdf",
+		path_res + "/10per_kmers_count_plot.pdf",
+
+		expand(path_res + "/{name}.fa", name = ['5per', '10per']),
+		expand(path_res + "/{name}_kmers_count_pheno.csv", name = ['5per', '10per'])
+
+rule gwas:
+	input:
+		phenotype
+
+	output:
+		path_res + "/pass_threshold_5per",
+		path_res + "/pass_threshold_10per"
+    
+	conda:
+		f"{conda_env_folder}/gwas_kmr.yml"
+		
+	threads: 15
+        
+         
+	shell: 
+		"""
+		export LD_LIBRARY_PATH="/home/udiland/miniconda3/envs/gwas_kmr/lib${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"
+		python /home/udiland/gwas_kmr/gwas_program/kmers_gwas.py --pheno {input} --kmers_table /home/udiland/gwas_kmr/LONG2_207_ci2_mac5_p0.2 -k 10000000 -l 31 -p 8 --outdir {gwas_out}
+
+		cp {gwas_out}/kmers/pass_threshold_5per {path_res}
+		cp {gwas_out}/kmers/pass_threshold_10per {path_res} 
+		"""
+
+
+rule make_kmr_file:
+	input:
+		path_res + "/pass_threshold_{name}"
+
+	output: 
+		path_res + "/kmers_{name}.txt"
+
+
+	run:
+		# read the gwas results 
+		df_kmers = pd.read_csv(input[0], sep="\t")
+		# make a list of kmer sequence
+		lst_kmers = df_kmers['rs'].str.split("_").apply(lambda x: x[0])
+		#write kmers to file
+		with open(output[0], "w") as f:
+			for kmer in lst_kmers:
+				f.write(kmer + "\n")
+
+		
+rule get_kmers_tbl:
+	input:
+		path_res + "/kmers_{name}.txt"
+
+	output: path_res + "/kmers_presence_absence_{name}.tsv"		
+
+
+	conda:
+		f"{conda_env_folder}/gwas_kmr.yml"
+
+	threads: 1
+	
+	shell: 
+		"""
+		export LD_LIBRARY_PATH="/home/udiland/miniconda3/envs/gwas_kmr/lib${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"
+		/home/udiland/gwas_kmr/gwas_program/bin/filter_kmers -t /home/udiland/gwas_kmr/LONG2_207_ci2_mac5_p0.2 -k {input[0]}  -o {output[0]}
+		"""
+
+
+rule kmers_summary:
+	input:
+		path_res + "/kmers_presence_absence_{name}.tsv"
+
+	output:
+		path_res + "/{name}_kmers_count_pheno.csv"
+
+    
+	threads: 1
+
+	run:
+		#read phenotype table
+		pheno = pd.read_csv(config['phenotype_tbl'], sep="\t")
+
+		#read gwas results kmers in accessions 
+		kmers = pd.read_csv(input[0], sep="\t")
+
+		#sum the number of kmers in each accession
+		kmers_sum = kmers.iloc[:,1:].sum()
+		kmers_sum = kmers_sum.to_frame()
+		kmers_sum['accession_id'] = kmers_sum.index
+
+		#merge with phenotype table
+		kmers_sum = kmers_sum.merge(pheno, on='accession_id')
+		kmers_sum.columns = ['n_kmers', 'accession_id', 'phenotype_value']
+
+		#write results
+		kmers_sum.to_csv(output[0], index=False)
+		
+
+#make a fasta file from kmers
+rule make_kmr_fasta_file:
+	input:
+		path_res + "/pass_threshold_{name}"
+
+	output:
+		path_res + "/{name}.fa"
+	
+
+	threads: 1
+
+
+	run:
+		# read kmers
+		kmers = pd.read_csv(input[0], sep="\t")
+		
+		# make fasta files
+		with open(output[0], "w") as f:
+			for i in range(kmers.shape[0]):
+				f.write(">" + kmers['rs'].str.split("_")[i][1] + "\n" + kmers['rs'].str.split("_")[i][0] + "\n")
+			
+			
+
+rule plot_kmers_5per:
+        input:
+                path_res + "/5per_kmers_count_pheno.csv"
+
+        output:
+                path_res + "/5per_kmers_count_plot.pdf"
+
+
+	conda:
+		f"{conda_env_folder}/gwas_kmr.yml"
+
+	script:
+		scripts + "/plot_kmers.R"
+
+
+
+rule plot_kmers_10per:
+        input:
+                path_res + "/10per_kmers_count_pheno.csv"
+
+        output:
+                path_res + "/10per_kmers_count_plot.pdf"
+
+
+        conda:
+                f"{conda_env_folder}/gwas_kmr.yml"
+
+
+        script:
+                scripts + "/plot_kmers.R"
+
+
