@@ -13,6 +13,13 @@ scripts = config['script_path']
 conda_env_folder = config['conda_env_folder']
 
 
+# if gwas results folder exist, delete it
+if os.path.isdir(gwas_out):
+	os.system(f"rm -r {gwas_out}")
+if os.path.isdir(path_res):
+	os.system(f"rm -r {path_res}")
+ 
+
 rule all:
 	input:
 		path_res + "/5per_kmers_count_plot.pdf",
