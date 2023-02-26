@@ -354,3 +354,10 @@ rule make_man_plot_pass10:
         script:
                 f"{script_path}/man_kmers_snakemake_intersection.R"
 
+
+rule delete_files:
+        shell:
+                """
+                rm {path_res}/kmer*
+                rm {path_trs}/read*
+                """
