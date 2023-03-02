@@ -1,9 +1,9 @@
 
-script_path: /home/annamin1/gwas_kmer/scripts/
-results_path: /home/annamin1/gwas_kmer/LR/results
-phenotype_tbl: /home/annamin1/gwas_kmer/LR/LR.pheno
-gwas_out: /home/annamin1/gwas_kmer/LR/gwas_out
-reads_folder: /home/annamin1/gwas_kmer/LR/AEG_2974_0
+results_path: 
+phenotype_tbl: 
+gwas_out: 
+reads_folder: 
 ref_genome: /home/udiland/gbib/gbib_data/long_6782_newV2/221207_longissima_pseudomolecules_v1_1234567un.fasta
 bowtie_idx: /home/udiland/long_bowtie2_index/long_6782_idx
-conda_env_folder: /home/annamin1/gwas_kmer/conda_env
+conda_env_folder: /home/udiland/conda_env
+script_path: /home/udiland/gwas_kmr/scripts
