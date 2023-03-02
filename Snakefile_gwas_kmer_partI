@@ -11,13 +11,6 @@ gwas_out = config['gwas_out']
 scripts = config['script_path']
 
 conda_env_folder = config['conda_env_folder']
-
-
-# if gwas results folder exist, delete it
-if os.path.isdir(gwas_out):
-	os.system(f"rm -r {gwas_out}")
-if os.path.isdir(path_res):
-	os.system(f"rm -r {path_res}")
  
 
 rule all:
@@ -48,7 +41,8 @@ rule gwas:
 		python /home/udiland/gwas_kmr/gwas_program/kmers_gwas.py --pheno {input} --kmers_table /home/udiland/gwas_kmr/LONG2_207_ci2_mac5_p0.2 -k 10000000 -l 31 -p 8 --outdir {gwas_out}
 
 		cp {gwas_out}/kmers/pass_threshold_5per {path_res}
-		cp {gwas_out}/kmers/pass_threshold_10per {path_res} 
+		cp {gwas_out}/kmers/pass_threshold_10per {path_res}
+		rm -r {gwas_out} 
 		"""
 
 

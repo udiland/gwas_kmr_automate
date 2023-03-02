@@ -8,4 +8,4 @@ snakemake -s Snakefile_gwas_kmer_partII --configfile $1 --use-conda --latency-wa
 
 conda deactivate
 
-echo 'PART II FINISHED SUCCESSFULLY'
+
